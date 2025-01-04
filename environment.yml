@@ -1,0 +1,11 @@
+name: icl
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - pip
+  - python=3.12.4
+  - pytorch=2.5.1
+  - pip:
+    - matplotlib==3.10.0
+    - pandas==2.2.3
