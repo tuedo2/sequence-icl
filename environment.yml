@@ -9,3 +9,4 @@ dependencies:
   - pip:
     - matplotlib==3.10.0
     - pandas==2.2.3
+    - transformers==4.47.1
