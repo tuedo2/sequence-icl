@@ -85,11 +85,11 @@ class CausalSelfAttention(nn.Module):
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
+        q = q.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
+        v = v.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) @ (B, nh, hs, T) -> (B, nh, T, T)
+        # causal self-attention; Self-attend: (B, nh, L, hs) @ (B, nh, hs, L) -> (B, nh, L, L)
         # efficient attention using Flash Attention CUDA kernels
         y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropoutp=(self.dropout if self.training else 0.0), is_causal=True)
         
@@ -146,6 +146,9 @@ class TransformerModel(nn.Module):
         self.transformer_blocks = nn.Sequential(*[TransformerBlock(config.n_embd, config.n_head, config.dropout) for _ in range(config.n_layer)])
         self.norm_f = nn.LayerNorm(config.n_embd)      # added final layer norm
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size)    # Unembedding
+
+        # report number of parameters
+        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
     
     def forward(self, idx, targets=None):
         B, L = idx.shape
@@ -159,12 +162,12 @@ class TransformerModel(nn.Module):
         logits = self.lm_head(x)    # (B, L, vocab_size)
 
         if targets is None:
+            logits = self.lm_head(x[:, [-1], :]) 
             loss = None
         else:
-            B, L, V = logits.shape
-            logits = logits.view(B * L, V)
-            targets = targets.view(B * L)
-            loss = F.cross_entropy(logits, targets)     # In regression case, loss is not defined like this
+            logits = self.lm_head(x) 
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)     
+            # In regression case, loss is not defined as cross_entropy...
         
         return logits, loss
     
