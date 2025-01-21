@@ -10,3 +10,4 @@ dependencies:
     - matplotlib==3.10.0
     - pandas==2.2.3
     - transformers==4.47.1
+    - tiktoken==0.8.0
