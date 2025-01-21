@@ -60,12 +60,51 @@ class MultiHeadAttention(nn.Module):
         out = self.dropout(self.proj(out))
         return out
 
+
+class CausalSelfAttention(nn.Module):
+    """ faster version of MultiHeadAttention derived from nanoGPT by parallelizing over the heads in forward pass """
+
+    def __init__(self, n_embd, n_head, dropout=0.0):
+        super().__init__()
+        assert n_embd % n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(n_embd, 3 * n_embd)
+        # output projection
+        self.c_proj = nn.Linear(n_embd, n_embd)
+        # regularization
+        self.resid_dropout = nn.Dropout(dropout)
+
+        self.n_head = n_head
+        self.n_embd = n_embd
+        self.dropout = dropout
+        # flash attention is faster but support is only in PyTorch >= 2.0
+        self.flash = hasattr(F, 'scaled_dot_product_attention')
+
+    def forward(self, x):
+        B, L, H = x.shape # batch size, sequence length, embedding dimensionality (n_embd)
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # causal self-attention; Self-attend: (B, nh, T, hs) @ (B, nh, hs, T) -> (B, nh, T, T)
+        # efficient attention using Flash Attention CUDA kernels
+        y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropoutp=(self.dropout if self.training else 0.0), is_causal=True)
+        
+        y = y.transpose(1, 2).contiguous().view(B, L, H) # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
+        return y
+
 class TransformerBlock(nn.Module):
 
     def __init__(self, n_embd=512, num_heads=4, dropout=0.0):
         head_size = n_embd // num_heads
         self.norm1 = nn.LayerNorm(n_embd)
-        self.multihead_attention = MultiHeadAttention(n_embd, num_heads, head_size, dropout=dropout)
+        self.multihead_attention = CausalSelfAttention(n_embd, num_heads, head_size, dropout=dropout)
         self.norm2 = nn.LayerNorm(n_embd)
         self.feedforward = nn.Sequential(
             nn.Linear(n_embd, 4 * n_embd),
