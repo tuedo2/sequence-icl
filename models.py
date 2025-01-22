@@ -85,13 +85,13 @@ class CausalSelfAttention(nn.Module):
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
-        q = q.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
-        v = v.view(B, H, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
+        k = k.view(B, L, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
+        q = q.view(B, L, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
+        v = v.view(B, L, self.n_head, H // self.n_head).transpose(1, 2) # (B, nh, L, hs)
 
         # causal self-attention; Self-attend: (B, nh, L, hs) @ (B, nh, hs, L) -> (B, nh, L, L)
         # efficient attention using Flash Attention CUDA kernels
-        y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropoutp=(self.dropout if self.training else 0.0), is_causal=True)
+        y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=(self.dropout if self.training else 0.0), is_causal=True)
         
         y = y.transpose(1, 2).contiguous().view(B, L, H) # re-assemble all head outputs side by side
 
@@ -102,9 +102,10 @@ class CausalSelfAttention(nn.Module):
 class TransformerBlock(nn.Module):
 
     def __init__(self, n_embd=512, num_heads=4, dropout=0.0):
-        head_size = n_embd // num_heads
+        super().__init__()
+        # head_size = n_embd // num_heads
         self.norm1 = nn.LayerNorm(n_embd)
-        self.multihead_attention = CausalSelfAttention(n_embd, num_heads, head_size, dropout=dropout)
+        self.multihead_attention = CausalSelfAttention(n_embd, num_heads, dropout=dropout)
         self.norm2 = nn.LayerNorm(n_embd)
         self.feedforward = nn.Sequential(
             nn.Linear(n_embd, 4 * n_embd),
@@ -125,6 +126,7 @@ class TransformerBlock(nn.Module):
 
 @dataclass
 class Config:
+    batch_size: int = 64
     context_length: int = 64 
     vocab_size: int = 256 # GPT-2 vocab_size of 50257
     n_layer: int = 4
@@ -170,6 +172,16 @@ class TransformerModel(nn.Module):
             # In regression case, loss is not defined as cross_entropy...
         
         return logits, loss
+    
+    def get_num_params(self):
+        """
+        Return the number of parameters in the model.
+        For non-embedding count (default), the position embeddings get subtracted.
+        The token embeddings would too, except due to the parameter sharing these
+        params are actually used as weights in the final layer, so we include them.
+        """
+        n_params = sum(p.numel() for p in self.parameters())
+        return n_params
     
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
